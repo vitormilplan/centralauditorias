@@ -316,6 +316,31 @@ select{
 }
 .report-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
 
+/* ENTREVISTADOS (auditor preenche ao fazer o checklist) */
+.entrev-row{display:flex;gap:8px;align-items:center;padding:5px 0;}
+.entrev-row input{flex:1;}
+.entrev-list-view{font-size:12.5px;color:var(--text-dark);margin:6px 0 4px;}
+.entrev-list-view .p{padding:3px 0;border-top:1px solid #f5f6f8;}
+.entrev-list-view .p:first-child{border-top:none;}
+
+/* CATEGORIA (classificação do líder: PP/OP/OBS/NC) */
+.cat-select{
+  font-family:'Inter',sans-serif;font-size:12px;font-weight:700;padding:6px 10px;
+  border-radius:8px;border:1.5px solid var(--border);background:#fff;color:var(--text-dark);
+  margin-top:8px;cursor:pointer;
+}
+.cat-select.cat-PP{border-color:var(--green-ok);color:var(--green-ok);}
+.cat-select.cat-OP{border-color:var(--blue-400);color:#2a5a8c;}
+.cat-select.cat-OBS{border-color:var(--amber-warn);color:var(--amber-warn);}
+.cat-select.cat-NC{border-color:var(--red-600);color:var(--red-600);}
+
+/* CABEÇALHO COMPLETO DA CAMPANHA (formulário RAI) */
+.camp-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;}
+.camp-detail-grid .full{grid-column:1/-1;}
+.camp-detail-grid label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;display:block;margin-bottom:5px;}
+.camp-detail-grid textarea{font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;width:100%;min-height:60px;resize:vertical;}
+@media (max-width:640px){ .camp-detail-grid{grid-template-columns:1fr;} }
+
 </style>
 </head>
 <body>
@@ -385,6 +410,9 @@ const APPS_SCRIPT_URL = '';
 // Precisa ser EXATAMENTE igual à constante SECRET no Code.gs.
 const GESTOR_SECRET = 'auditoria2026';
 
+const CATEGORIA_LABEL = { PP:'Ponto Positivo', OP:'Oportunidade de Melhoria', OBS:'Observação', NC:'Não Conformidade' };
+const CATEGORIA_SIGLA = { PP:'PP', OP:'OP', OBS:'OBS', NC:'NC' };
+
 let LIB = { checklists: [], itens: [], auditores: [] };
 let CAMPANHAS = [];
 let EXECUCOES = [];
@@ -393,10 +421,11 @@ let loaded = false;
 let storageAvailable = true;
 
 let role = null; // 'gestor' | 'auditor' | 'lider'
-let currentTab = 'painel'; // painel | checklists | auditorias | auditores | historico
+let currentTab = 'painel';
 let openDisciplinas = {};
 let editingChecklistId = null;
 let expandedAuditoriaId = null;
+let editingCampId = null;
 
 // fluxo do auditor comum
 let auditorNome = '';
@@ -404,11 +433,12 @@ let auditorCampanhaId = '';
 let auditorDisciplina = '';
 let sorteio = null;
 let respostasDraft = {};
+let entrevistadosDraft = [];
 let auditorSubmitted = null;
 
 // fluxo do auditor líder
 let liderCampanhaId = null;
-let liderView = 'revisao'; // 'revisao' | 'relatorio'
+let liderView = 'revisao';
 
 // ---------- helpers ----------
 function escapeHtml(s){
@@ -472,7 +502,6 @@ async function loadPublic(){
   }
   loaded = true;
 }
-
 async function loadGestor(){
   try{
     const res = await fetch(APPS_SCRIPT_URL+'?secret='+encodeURIComponent(GESTOR_SECRET));
@@ -487,7 +516,6 @@ async function loadGestor(){
     storageAvailable = false;
   }
 }
-
 async function sortear(disciplina){
   try{
     const res = await fetch(APPS_SCRIPT_URL+'?action=sorteio&disciplina='+encodeURIComponent(disciplina));
@@ -496,7 +524,6 @@ async function sortear(disciplina){
     return { ok:false, error:'Não consegui falar com o servidor. Confira sua internet e tente de novo.' };
   }
 }
-
 async function postJson(payload){
   try{
     const res = await fetch(APPS_SCRIPT_URL, { method:'POST', body: JSON.stringify(payload) });
@@ -506,7 +533,6 @@ async function postJson(payload){
   }
 }
 
-// autosave da biblioteca (checklists/itens/auditores)
 let saveTimer = null;
 function scheduleSave(){
   clearTimeout(saveTimer);
@@ -516,17 +542,12 @@ function scheduleSave(){
 async function doSave(attempt){
   setSaveStatus('saving');
   const result = await postJson({ type:'cadastro', secret: GESTOR_SECRET, checklists: LIB.checklists, itens: LIB.itens, auditores: LIB.auditores });
-  if(result && result.ok===false){
-    setSaveStatus('error');
-    alert('A planilha recusou o salvamento: '+(result.error||'erro desconhecido'));
-    return;
-  }
+  if(result && result.ok===false){ setSaveStatus('error'); alert('A planilha recusou o salvamento: '+(result.error||'erro desconhecido')); return; }
   if(result && result.ok===true){ setSaveStatus('saved'); storageAvailable = true; return; }
   if(attempt < 4){ setTimeout(()=>doSave(attempt+1), 700*attempt); }
   else { setSaveStatus('error'); storageAvailable = false; }
 }
 
-// autosave das campanhas de auditoria
 let saveCampTimer = null;
 function scheduleSaveCampanhas(){
   clearTimeout(saveCampTimer);
@@ -536,16 +557,11 @@ function scheduleSaveCampanhas(){
 async function doSaveCampanhas(attempt){
   setSaveStatus('saving');
   const result = await postJson({ type:'campanhas', secret: GESTOR_SECRET, campanhas: CAMPANHAS });
-  if(result && result.ok===false){
-    setSaveStatus('error');
-    alert('A planilha recusou o salvamento: '+(result.error||'erro desconhecido'));
-    return;
-  }
+  if(result && result.ok===false){ setSaveStatus('error'); alert('A planilha recusou o salvamento: '+(result.error||'erro desconhecido')); return; }
   if(result && result.ok===true){ setSaveStatus('saved'); storageAvailable = true; return; }
   if(attempt < 4){ setTimeout(()=>doSaveCampanhas(attempt+1), 700*attempt); }
   else { setSaveStatus('error'); storageAvailable = false; }
 }
-
 function setSaveStatus(s){
   const el = document.getElementById('saveStatus');
   if(!el) return;
@@ -556,7 +572,7 @@ function setSaveStatus(s){
   el.className = 'save-status '+s;
 }
 
-// ---------- ações de cadastro: biblioteca ----------
+// ---------- ações: biblioteca ----------
 function criarChecklist(disciplina, nome){
   const id = uid();
   LIB.checklists.push({ id, disciplina: disciplina.trim(), nome: nome.trim(), ativo: true });
@@ -564,30 +580,24 @@ function criarChecklist(disciplina, nome){
   scheduleSave();
   render();
 }
-function toggleChecklistAtivo(id){
-  const c = LIB.checklists.find(c=>c.id===id);
-  if(c){ c.ativo = !c.ativo; scheduleSave(); render(); }
-}
+function toggleChecklistAtivo(id){ const c = LIB.checklists.find(c=>c.id===id); if(c){ c.ativo = !c.ativo; scheduleSave(); render(); } }
 function excluirChecklist(id){
   const c = LIB.checklists.find(c=>c.id===id);
   if(!confirm('Excluir o checklist "'+(c?c.nome:'')+'" e todos os seus itens? Auditorias já realizadas com ele continuam no histórico.')) return;
   LIB.checklists = LIB.checklists.filter(c=>c.id!==id);
   LIB.itens = LIB.itens.filter(i=>i.checklist_id!==id);
   if(editingChecklistId===id) editingChecklistId = null;
-  scheduleSave();
-  render();
+  scheduleSave(); render();
 }
 function addItem(checklistId){
   const itens = itensDoChecklist(checklistId);
   LIB.itens.push({ checklist_id: checklistId, ordem: itens.length+1, item: '' });
-  scheduleSave();
-  render();
+  scheduleSave(); render();
 }
 function removeItem(checklistId, ordem){
   LIB.itens = LIB.itens.filter(i=>!(i.checklist_id===checklistId && i.ordem===ordem));
   itensDoChecklist(checklistId).forEach((it,idx)=>{ it.ordem = idx+1; });
-  scheduleSave();
-  render();
+  scheduleSave(); render();
 }
 function editItemText(checklistId, ordem, text){
   const it = LIB.itens.find(i=>i.checklist_id===checklistId && i.ordem===ordem);
@@ -598,24 +608,21 @@ function addAuditor(nome){
   if(!nome) return;
   if(LIB.auditores.some(a=>a.nome.toLowerCase()===nome.toLowerCase())){ alert('Esse auditor já está cadastrado.'); return; }
   LIB.auditores.push({ nome, ativo: true });
-  scheduleSave();
-  render();
+  scheduleSave(); render();
 }
-function toggleAuditorAtivo(nome){
-  const a = LIB.auditores.find(a=>a.nome===nome);
-  if(a){ a.ativo = !a.ativo; scheduleSave(); render(); }
-}
+function toggleAuditorAtivo(nome){ const a = LIB.auditores.find(a=>a.nome===nome); if(a){ a.ativo = !a.ativo; scheduleSave(); render(); } }
 function removerAuditor(nome){
   if(!confirm('Remover "'+nome+'" da lista de auditores?')) return;
   LIB.auditores = LIB.auditores.filter(a=>a.nome!==nome);
-  scheduleSave();
-  render();
+  scheduleSave(); render();
 }
 
-// ---------- ações: campanhas de auditoria ----------
-function criarCampanha(titulo, local){
-  const camp = { id: uid(), titulo: titulo.trim(), local: (local||'').trim(), data_criacao: new Date().toISOString(), status: 'aberta', lider: '' };
+// ---------- ações: campanhas de auditoria (RAI) ----------
+const CAMP_FIELDS_DEFAULT = { titulo:'', local:'', status:'aberta', lider:'', rai_numero:'', periodo_inicio:'', periodo_fim:'', objetivo:'', criterio:'', metodo:'', equipe:'', sede_obra:'', consideracoes_gerais:'' };
+function criarCampanha(titulo){
+  const camp = Object.assign({}, CAMP_FIELDS_DEFAULT, { id: uid(), titulo: titulo.trim(), data_criacao: new Date().toISOString() });
   CAMPANHAS.push(camp);
+  editingCampId = camp.id;
   scheduleSaveCampanhas();
   render();
 }
@@ -633,14 +640,14 @@ async function excluirCampanha(id){
   if(!confirm('Excluir a auditoria "'+(c?c.titulo:'')+'"? Isso vai apagar também os '+qtd+' checklist(s) preenchido(s) dentro dela. Essa ação não pode ser desfeita.')) return;
   const res = await postJson({ type:'excluir_auditoria', secret: GESTOR_SECRET, auditoria_id: id });
   if(!res.ok){ alert('Não consegui excluir: '+(res.error||'erro desconhecido')); return; }
+  const idsRemovidos = new Set(EXECUCOES.filter(e=>e.auditoria_id===id).map(e=>e.id));
   CAMPANHAS = CAMPANHAS.filter(c=>c.id!==id);
   EXECUCOES = EXECUCOES.filter(e=>e.auditoria_id!==id);
-  const idsRemovidos = new Set(EXECUCOES.filter(e=>e.auditoria_id===id).map(e=>e.id));
   RESPOSTAS = RESPOSTAS.filter(r=>!idsRemovidos.has(r.execucao_id));
   if(liderCampanhaId===id) liderCampanhaId = null;
   render();
 }
-async function excluirExecucaoAction(execId, andarPara){
+async function excluirExecucaoAction(execId){
   const e = EXECUCOES.find(e=>e.id===execId);
   if(!confirm('Excluir o checklist "'+(e?e.checklist_nome:'')+'" ('+(e?e.disciplina:'')+')? Essa ação não pode ser desfeita.')) return;
   const res = await postJson({ type:'excluir_execucao', secret: GESTOR_SECRET, execucao_id: execId });
@@ -649,35 +656,27 @@ async function excluirExecucaoAction(execId, andarPara){
   RESPOSTAS = RESPOSTAS.filter(r=>r.execucao_id!==execId);
   render();
 }
-async function atualizarRespostaAction(execId, ordem, resultado, comentario, excluido){
+async function atualizarRespostaAction(execId, ordem, resultado, comentario, excluido, categoria){
   const r = RESPOSTAS.find(r=>r.execucao_id===execId && r.ordem===ordem);
-  if(r){ r.resultado = resultado; r.comentario = comentario; r.excluido = excluido; }
-  await postJson({ type:'atualizar_resposta', secret: GESTOR_SECRET, execucao_id: execId, ordem, resultado, comentario, excluido });
+  if(r){ r.resultado = resultado; r.comentario = comentario; r.excluido = excluido; r.categoria = categoria; }
+  await postJson({ type:'atualizar_resposta', secret: GESTOR_SECRET, execucao_id: execId, ordem, resultado, comentario, excluido, categoria });
 }
 
 // ---------- render: shell ----------
 function updateStorageWarning(){
   const el = document.getElementById('storageWarning');
   const txt = document.getElementById('storageWarningText');
-  if(!APPS_SCRIPT_URL){
-    el.style.display = 'flex';
-    txt.textContent = 'Defina a constante APPS_SCRIPT_URL no código do painel (cole a URL do seu App da Web do Apps Script) para começar a usar.';
-  } else if(!storageAvailable){
-    el.style.display = 'flex';
-    txt.textContent = 'Não consegui falar com a planilha agora. Verifique sua internet e a URL do Apps Script.';
-  } else {
-    el.style.display = 'none';
-  }
+  if(!APPS_SCRIPT_URL){ el.style.display='flex'; txt.textContent = 'Defina a constante APPS_SCRIPT_URL no código do painel para começar a usar.'; }
+  else if(!storageAvailable){ el.style.display='flex'; txt.textContent = 'Não consegui falar com a planilha agora. Verifique sua internet e a URL do Apps Script.'; }
+  else { el.style.display='none'; }
 }
 function isAuthed(){
   try{ return sessionStorage.getItem('audc_gestor_secret') === GESTOR_SECRET; }
   catch(e){ return false; }
 }
-
 function render(){
   if(!loaded) return;
   updateStorageWarning();
-
   const pill = document.getElementById('modePill');
   if(role==='gestor'){ pill.textContent='Modo gestor'; pill.className='mode-pill edit'; }
   else if(role==='lider'){ pill.textContent='Modo auditor líder'; pill.className='mode-pill edit'; }
@@ -686,11 +685,7 @@ function render(){
 
   document.getElementById('backToLandingWrap').style.display = role ? 'inline' : 'none';
 
-  if(!role){
-    document.getElementById('controlsBar').style.display='none';
-    document.getElementById('content').innerHTML='';
-    return;
-  }
+  if(!role){ document.getElementById('controlsBar').style.display='none'; document.getElementById('content').innerHTML=''; return; }
 
   if(role==='gestor'){
     if(!isAuthed()) return;
@@ -700,27 +695,21 @@ function render(){
     setSaveStatus('saved');
     return;
   }
-
   if(role==='lider'){
     if(!isAuthed()) return;
     document.getElementById('controlsBar').style.display='none';
     renderLiderContent();
     return;
   }
-
   document.getElementById('controlsBar').style.display='none';
   renderAuditorContent();
 }
-
 function renderControlsGestor(){
   const bar = document.getElementById('controlsBar');
   const tabs = [['painel','Painel'],['checklists','Checklists'],['auditorias','Auditorias'],['auditores','Auditores'],['historico','Histórico']];
   bar.innerHTML = `<div class="tabbar">${tabs.map(([id,label])=>`<button class="tabbtn ${currentTab===id?'active':''}" data-tab="${id}">${label}</button>`).join('')}</div>`;
-  bar.querySelectorAll('[data-tab]').forEach(btn=>{
-    btn.onclick = ()=>{ currentTab = btn.dataset.tab; render(); };
-  });
+  bar.querySelectorAll('[data-tab]').forEach(btn=>{ btn.onclick = ()=>{ currentTab = btn.dataset.tab; render(); }; });
 }
-
 function renderGestorContent(){
   const content = document.getElementById('content');
   if(currentTab==='painel'){ content.innerHTML = renderPainelHtml(); return; }
@@ -730,7 +719,7 @@ function renderGestorContent(){
   content.innerHTML = renderHistoricoHtml(); attachHistoricoTab();
 }
 
-// ---------- render: painel (KPIs) ----------
+// ---------- render: painel ----------
 function renderPainelHtml(){
   const totalExecucoes = EXECUCOES.length;
   const totalItens = RESPOSTAS.length;
@@ -761,7 +750,6 @@ function renderPainelHtml(){
     const b = porDisc[d].conf+porDisc[d].naoConf;
     return { d, pct: b?Math.round((porDisc[d].conf/b)*1000)/10:0, b };
   }).sort((x,y)=>y.pct-x.pct);
-
   const rankingHtml = discList.length ? discList.map(r=>`
     <div class="rank-row">
       <div class="rank-label">${escapeHtml(r.d)}</div>
@@ -774,7 +762,6 @@ function renderPainelHtml(){
     const e = em[r.execucao_id]||{};
     return Object.assign({}, r, { auditor:e.auditor, disciplina:e.disciplina, checklist_nome:e.checklist_nome, data:e.data });
   }).sort((x,y)=> new Date(y.data||0) - new Date(x.data||0)).slice(0,15);
-
   const pendHtml = pend.length ? pend.map(p=>`
     <div class="pend-item">
       <div class="pend-dot"></div>
@@ -787,14 +774,8 @@ function renderPainelHtml(){
 
   return `
     <div class="section">${kpis}</div>
-    <div class="section">
-      <div class="section-title"><span class="bar"></span>Conformidade por disciplina</div>
-      <div class="card">${rankingHtml}</div>
-    </div>
-    <div class="section">
-      <div class="section-title"><span class="bar"></span>Não conformidades recentes</div>
-      <div class="card">${pendHtml}</div>
-    </div>
+    <div class="section"><div class="section-title"><span class="bar"></span>Conformidade por disciplina</div><div class="card">${rankingHtml}</div></div>
+    <div class="section"><div class="section-title"><span class="bar"></span>Não conformidades recentes</div><div class="card">${pendHtml}</div></div>
   `;
 }
 
@@ -822,9 +803,8 @@ function renderItemEditor(checklist){
 function renderChecklistsHtml(){
   const discs = disciplinasExistentes();
   let body;
-  if(!discs.length){
-    body = `<div class="empty-cad">Nenhum checklist cadastrado ainda. Crie o primeiro logo abaixo.</div>`;
-  } else {
+  if(!discs.length){ body = `<div class="empty-cad">Nenhum checklist cadastrado ainda. Crie o primeiro logo abaixo.</div>`; }
+  else {
     body = discs.map(d=>{
       const checklists = LIB.checklists.filter(c=>c.disciplina===d);
       const open = !!openDisciplinas[d];
@@ -848,10 +828,7 @@ function renderChecklistsHtml(){
         <div class="disc-block">
           <div class="disc-head ${open?'open':''}" data-disc="${escapeAttr(d)}">
             <div class="name">${escapeHtml(d)}</div>
-            <div style="display:flex;align-items:center;gap:14px;">
-              <div class="stats">${ativos} de ${checklists.length} ativo(s)</div>
-              <div class="caret">▶</div>
-            </div>
+            <div style="display:flex;align-items:center;gap:14px;"><div class="stats">${ativos} de ${checklists.length} ativo(s)</div><div class="caret">▶</div></div>
           </div>
           <div class="disc-body ${open?'open':''}">${rows}</div>
         </div>
@@ -884,12 +861,8 @@ function attachChecklistsTab(){
   document.querySelectorAll('[data-edit]').forEach(el=>{ el.onclick = ()=>{ editingChecklistId = editingChecklistId===el.dataset.edit ? null : el.dataset.edit; render(); }; });
   document.querySelectorAll('[data-toggle]').forEach(el=>{ el.onclick = ()=> toggleChecklistAtivo(el.dataset.toggle); });
   document.querySelectorAll('[data-del]').forEach(el=>{ el.onclick = ()=> excluirChecklist(el.dataset.del); });
-  document.querySelectorAll('[data-item-text]').forEach(el=>{
-    el.oninput = ()=>{ const [cid, ordem] = el.dataset.itemText.split('::'); editItemText(cid, Number(ordem), el.value); };
-  });
-  document.querySelectorAll('[data-item-del]').forEach(el=>{
-    el.onclick = ()=>{ const [cid, ordem] = el.dataset.itemDel.split('::'); removeItem(cid, Number(ordem)); };
-  });
+  document.querySelectorAll('[data-item-text]').forEach(el=>{ el.oninput = ()=>{ const [cid, ordem] = el.dataset.itemText.split('::'); editItemText(cid, Number(ordem), el.value); }; });
+  document.querySelectorAll('[data-item-del]').forEach(el=>{ el.onclick = ()=>{ const [cid, ordem] = el.dataset.itemDel.split('::'); removeItem(cid, Number(ordem)); }; });
   document.querySelectorAll('[data-item-add]').forEach(el=>{ el.onclick = ()=> addItem(el.dataset.itemAdd); });
   document.querySelectorAll('[data-editor-close]').forEach(el=>{ el.onclick = ()=>{ editingChecklistId = null; render(); }; });
   const criarBtn = document.getElementById('criarChecklistBtn');
@@ -901,63 +874,86 @@ function attachChecklistsTab(){
   };
 }
 
-// ---------- render: auditorias (cadastro de campanhas) ----------
+// ---------- render: auditorias (cadastro do cabeçalho do RAI) ----------
+function renderCampDetailEditor(c){
+  return `
+    <div class="card" style="margin:8px 0 14px;background:#fafbfd;">
+      <div class="camp-detail-grid">
+        <div class="field"><label>RAI n° (manual)</label><input class="cad-input" data-camp-field="${c.id}::rai_numero" value="${escapeAttr(c.rai_numero)}" placeholder="Ex.: 001/26 — 1ª Auditoria Interna M.448"></div>
+        <div class="field"><label>Sede / Obra</label><input class="cad-input" data-camp-field="${c.id}::sede_obra" value="${escapeAttr(c.sede_obra)}" placeholder="Ex.: Obra M.448"></div>
+        <div class="field"><label>Período — início</label><input class="cad-input" type="date" data-camp-field="${c.id}::periodo_inicio" value="${escapeAttr(c.periodo_inicio)}"></div>
+        <div class="field"><label>Período — fim</label><input class="cad-input" type="date" data-camp-field="${c.id}::periodo_fim" value="${escapeAttr(c.periodo_fim)}"></div>
+        <div class="field"><label>Auditor líder</label><input class="cad-input" data-camp-field="${c.id}::lider" value="${escapeAttr(c.lider)}" placeholder="Nome do auditor líder"></div>
+        <div class="field"><label>Método da auditoria</label><input class="cad-input" data-camp-field="${c.id}::metodo" value="${escapeAttr(c.metodo)}" placeholder="Ex.: Entrevista e Amostragem"></div>
+        <div class="field full"><label>Membros da equipe auditora</label><input class="cad-input" data-camp-field="${c.id}::equipe" value="${escapeAttr(c.equipe)}" placeholder="Nomes separados por vírgula"></div>
+        <div class="field full"><label>Objetivo da auditoria</label><textarea data-camp-field="${c.id}::objetivo" placeholder="Ex.: Verificar a eficácia do Sistema Integrado de Gestão">${escapeHtml(c.objetivo)}</textarea></div>
+        <div class="field full"><label>Critério da auditoria</label><textarea data-camp-field="${c.id}::criterio" placeholder="Ex.: ABNT NBR ISO 9001:2015 / 14001:2015 / 45001:2018${'\n'}Contrato com Cliente X">${escapeHtml(c.criterio)}</textarea></div>
+      </div>
+    </div>
+  `;
+}
 function renderAuditoriasCadastroHtml(){
   const sorted = [...CAMPANHAS].sort((a,b)=> new Date(b.data_criacao||0) - new Date(a.data_criacao||0));
   const rows = sorted.length ? sorted.map(c=>{
     const qtd = execucoesDaCampanha(c.id).length;
+    const open = editingCampId===c.id;
     return `
-      <tr>
-        <td><input class="cad-input" data-camp-field="${c.id}::titulo" value="${escapeAttr(c.titulo)}" placeholder="Título da auditoria"></td>
-        <td><input class="cad-input" data-camp-field="${c.id}::local" value="${escapeAttr(c.local)}" placeholder="Local / obra"></td>
-        <td>${formatDateOnly(c.data_criacao)}</td>
-        <td>${qtd}</td>
-        <td><span class="status-tag ${c.status==='aberta'?'ativo':'inativo'}" style="cursor:pointer;" data-camp-toggle="${c.id}">${c.status==='aberta'?'Aberta':'Encerrada'}</span></td>
-        <td style="text-align:right;"><button class="icon-btn danger-btn" title="Excluir auditoria inteira" data-camp-del="${c.id}">🗑</button></td>
-      </tr>
+      <div class="disc-block">
+        <div class="disc-head ${open?'open':''}" data-camp-toggle-detail="${c.id}">
+          <div class="name">${escapeHtml(c.titulo)||'(sem título)'}</div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div class="stats">${c.rai_numero?escapeHtml(c.rai_numero)+' · ':''}${qtd} checklist(s)</div>
+            <span class="status-tag ${c.status==='aberta'?'ativo':'inativo'}" style="cursor:pointer;" data-camp-status="${c.id}">${c.status==='aberta'?'Aberta':'Encerrada'}</span>
+            <button class="icon-btn danger-btn" title="Excluir auditoria inteira" data-camp-del="${c.id}">🗑</button>
+            <div class="caret">▶</div>
+          </div>
+        </div>
+        <div class="disc-body ${open?'open':''}">
+          <div class="cad-form" style="border-top:none;padding-top:0;margin-top:0;">
+            <div class="field" style="min-width:260px;flex:1;"><label>Título</label><input class="cad-input" data-camp-field="${c.id}::titulo" value="${escapeAttr(c.titulo)}"></div>
+            <div class="field" style="min-width:200px;"><label>Local</label><input class="cad-input" data-camp-field="${c.id}::local" value="${escapeAttr(c.local)}"></div>
+          </div>
+          ${renderCampDetailEditor(c)}
+        </div>
+      </div>
     `;
-  }).join('') : `<tr><td colspan="6" class="empty-cad">Nenhuma auditoria criada ainda.</td></tr>`;
+  }).join('') : `<div class="empty-cad">Nenhuma auditoria criada ainda.</div>`;
 
   return `
     <div class="section">
-      <div class="section-title"><span class="bar"></span>Auditorias (eventos)</div>
+      <div class="section-title"><span class="bar"></span>Auditorias (RAI)</div>
       <div class="card">
-        <table class="data-table">
-          <thead><tr><th>Título</th><th>Local</th><th>Criada em</th><th>Checklists</th><th>Status</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+        ${rows}
         <div class="cad-form">
-          <div class="field" style="min-width:220px;">
+          <div class="field" style="min-width:280px;flex:1;">
             <label>Título da nova auditoria</label>
-            <input class="cad-input" id="novaCampTitulo" placeholder="Ex.: Auditoria trimestral — Obra Norte">
-          </div>
-          <div class="field" style="min-width:180px;">
-            <label>Local / obra (opcional)</label>
-            <input class="cad-input" id="novaCampLocal" placeholder="Ex.: Obra Norte">
+            <input class="cad-input" id="novaCampTitulo" placeholder="Ex.: 1ª Auditoria Interna M.448">
           </div>
           <button class="linkbtn" id="criarCampBtn" style="background:var(--navy-800);color:#fff;border-color:var(--navy-800);">+ Abrir auditoria</button>
         </div>
-        <div class="note" style="font-size:12px;color:var(--text-muted);margin-top:10px;">Clique no status (Aberta/Encerrada) pra trocar. Só auditorias abertas aparecem pro auditor escolher.</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:10px;">Clique no título de uma auditoria pra abrir e preencher RAI n°, período, objetivo, critério, método e equipe. Só auditorias "Aberta" aparecem pro auditor escolher.</div>
       </div>
     </div>
   `;
 }
 function attachAuditoriasCadastroTab(){
+  document.querySelectorAll('[data-camp-toggle-detail]').forEach(el=>{
+    el.onclick = ()=>{ editingCampId = editingCampId===el.dataset.campToggleDetail ? null : el.dataset.campToggleDetail; render(); };
+  });
   document.querySelectorAll('[data-camp-field]').forEach(el=>{
     el.oninput = ()=>{ const [id, campo] = el.dataset.campField.split('::'); editarCampanhaCampo(id, campo, el.value); };
   });
-  document.querySelectorAll('[data-camp-toggle]').forEach(el=>{ el.onclick = ()=> toggleCampanhaStatus(el.dataset.campToggle); });
-  document.querySelectorAll('[data-camp-del]').forEach(el=>{ el.onclick = ()=> excluirCampanha(el.dataset.campDel); });
+  document.querySelectorAll('[data-camp-status]').forEach(el=>{ el.onclick = (ev)=>{ ev.stopPropagation(); toggleCampanhaStatus(el.dataset.campStatus); }; });
+  document.querySelectorAll('[data-camp-del]').forEach(el=>{ el.onclick = (ev)=>{ ev.stopPropagation(); excluirCampanha(el.dataset.campDel); }; });
   const criarBtn = document.getElementById('criarCampBtn');
   if(criarBtn) criarBtn.onclick = ()=>{
     const titulo = document.getElementById('novaCampTitulo').value;
-    const local = document.getElementById('novaCampLocal').value;
     if(!titulo.trim()){ alert('Dê um título pra essa auditoria.'); return; }
-    criarCampanha(titulo, local);
+    criarCampanha(titulo);
   };
 }
 
-// ---------- render: auditores (cadastro) ----------
+// ---------- render: auditores ----------
 function renderAuditoresHtml(){
   const rows = LIB.auditores.length ? LIB.auditores.map(a=>`
     <tr>
@@ -972,15 +968,9 @@ function renderAuditoresHtml(){
     <div class="section">
       <div class="section-title"><span class="bar"></span>Auditores cadastrados</div>
       <div class="card">
-        <table class="data-table">
-          <thead><tr><th>Nome</th><th>Status</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <table class="data-table"><thead><tr><th>Nome</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>
         <div class="cad-form">
-          <div class="field" style="min-width:220px;">
-            <label>Nome do auditor</label>
-            <input class="cad-input" id="novoAuditorNome" placeholder="Nome completo">
-          </div>
+          <div class="field" style="min-width:220px;"><label>Nome do auditor</label><input class="cad-input" id="novoAuditorNome" placeholder="Nome completo"></div>
           <button class="linkbtn" id="addAuditorBtn" style="background:var(--navy-800);color:#fff;border-color:var(--navy-800);">+ Adicionar auditor</button>
         </div>
       </div>
@@ -1000,7 +990,6 @@ function attachAuditoresTab(){
 function renderHistoricoHtml(){
   const campMap = {}; CAMPANHAS.forEach(c=>{ campMap[c.id]=c; });
   const sorted = [...EXECUCOES].sort((a,b)=> new Date(b.data||0) - new Date(a.data||0));
-
   const rows = sorted.length ? sorted.map(e=>{
     const resp = respostasPorExecucao(e.id);
     const conf = resp.filter(r=>r.resultado==='CONFORME').length;
@@ -1012,11 +1001,12 @@ function renderHistoricoHtml(){
     const detailRow = isOpen ? `
       <tr><td colspan="7" style="padding:0;">
         <div style="padding:14px 16px;background:#fafbfd;border-top:1px solid var(--border);">
+          ${e.entrevistados && e.entrevistados.length ? `<div class="entrev-list-view"><b>Entrevistados:</b> ${e.entrevistados.map(p=>escapeHtml(p.nome)+' ('+escapeHtml(p.funcao)+')').join(', ')}</div>` : ''}
           ${resp.map(r=>`
             <div class="pend-item">
               <div class="pend-dot" style="background:${r.resultado==='CONFORME'?'var(--green-ok)':r.resultado==='NAO_CONFORME'?'var(--red-600)':'var(--amber-warn)'};"></div>
               <div class="pend-main">
-                <div class="t">${escapeHtml(r.item)} <span style="font-weight:400;color:var(--text-muted);">— ${labelResultado(r.resultado)}${r.excluido?' · excluído do relatório':''}</span></div>
+                <div class="t">${escapeHtml(r.item)} <span style="font-weight:400;color:var(--text-muted);">— ${labelResultado(r.resultado)}${r.categoria?' · '+CATEGORIA_SIGLA[r.categoria]:''}${r.excluido?' · excluído do relatório':''}</span></div>
                 ${r.comentario ? `<div class="m">${escapeHtml(r.comentario)}</div>` : ''}
               </div>
             </div>
@@ -1036,26 +1026,18 @@ function renderHistoricoHtml(){
       ${detailRow}
     `;
   }).join('') : `<tr><td colspan="7" class="empty-cad">Nenhum checklist registrado ainda.</td></tr>`;
-
   return `
     <div class="section">
       <div class="section-title"><span class="bar"></span>Histórico de checklists preenchidos</div>
       <div class="card">
-        <table class="data-table">
-          <thead><tr><th>Data</th><th>Auditor</th><th>Disciplina</th><th>Checklist</th><th>Auditoria</th><th>Conformidade</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <table class="data-table"><thead><tr><th>Data</th><th>Auditor</th><th>Disciplina</th><th>Checklist</th><th>Auditoria</th><th>Conformidade</th><th></th></tr></thead><tbody>${rows}</tbody></table>
       </div>
     </div>
   `;
 }
 function attachHistoricoTab(){
-  document.querySelectorAll('[data-hist-toggle]').forEach(el=>{
-    el.onclick = ()=>{ const id = el.dataset.histToggle; expandedAuditoriaId = expandedAuditoriaId===id ? null : id; render(); };
-  });
-  document.querySelectorAll('[data-hist-del]').forEach(el=>{
-    el.onclick = (ev)=>{ ev.stopPropagation(); excluirExecucaoAction(el.dataset.histDel); };
-  });
+  document.querySelectorAll('[data-hist-toggle]').forEach(el=>{ el.onclick = ()=>{ const id = el.dataset.histToggle; expandedAuditoriaId = expandedAuditoriaId===id ? null : id; render(); }; });
+  document.querySelectorAll('[data-hist-del]').forEach(el=>{ el.onclick = (ev)=>{ ev.stopPropagation(); excluirExecucaoAction(el.dataset.histDel); }; });
 }
 
 // ---------- render: fluxo do auditor comum ----------
@@ -1081,26 +1063,14 @@ function renderAuditorPickerHtml(){
       <div class="section-title"><span class="bar"></span>Iniciar auditoria</div>
       <div class="card">
         <div class="cad-form" style="border-top:none;padding-top:0;margin-top:0;">
-          <div class="field" style="min-width:200px;">
-            <label>Seu nome</label>
-            <select id="auditorNomeSelect">
-              <option value="">Selecione...</option>
-              ${nomes.map(a=>`<option value="${escapeAttr(a.nome)}">${escapeHtml(a.nome)}</option>`).join('')}
-            </select>
+          <div class="field" style="min-width:200px;"><label>Seu nome</label>
+            <select id="auditorNomeSelect"><option value="">Selecione...</option>${nomes.map(a=>`<option value="${escapeAttr(a.nome)}">${escapeHtml(a.nome)}</option>`).join('')}</select>
           </div>
-          <div class="field" style="min-width:220px;">
-            <label>Qual auditoria você está fazendo</label>
-            <select id="auditorCampSelect">
-              <option value="">Selecione...</option>
-              ${campsAbertas.map(c=>`<option value="${escapeAttr(c.id)}">${escapeHtml(c.titulo)}${c.local?' — '+escapeHtml(c.local):''}</option>`).join('')}
-            </select>
+          <div class="field" style="min-width:220px;"><label>Qual auditoria você está fazendo</label>
+            <select id="auditorCampSelect"><option value="">Selecione...</option>${campsAbertas.map(c=>`<option value="${escapeAttr(c.id)}">${escapeHtml(c.titulo)}${c.local?' — '+escapeHtml(c.local):''}</option>`).join('')}</select>
           </div>
-          <div class="field" style="min-width:200px;">
-            <label>Disciplina a auditar</label>
-            <select id="auditorDiscSelect">
-              <option value="">Selecione...</option>
-              ${discs.map(d=>`<option value="${escapeAttr(d)}">${escapeHtml(d)}</option>`).join('')}
-            </select>
+          <div class="field" style="min-width:200px;"><label>Disciplina a auditar</label>
+            <select id="auditorDiscSelect"><option value="">Selecione...</option>${discs.map(d=>`<option value="${escapeAttr(d)}">${escapeHtml(d)}</option>`).join('')}</select>
           </div>
           <button class="linkbtn" id="sortearBtn" style="background:var(--navy-800);color:#fff;border-color:var(--navy-800);">🎲 Sortear checklist</button>
         </div>
@@ -1123,13 +1093,36 @@ function attachAuditorPicker(){
     const res = await sortear(disc);
     btn.disabled = false; btn.textContent = '🎲 Sortear checklist';
     if(!res.ok){ errEl.textContent = res.error || 'Não consegui sortear um checklist.'; return; }
-    auditorNome = nome;
-    auditorCampanhaId = campId;
-    auditorDisciplina = disc;
-    sorteio = res.checklist;
-    respostasDraft = {};
+    auditorNome = nome; auditorCampanhaId = campId; auditorDisciplina = disc;
+    sorteio = res.checklist; respostasDraft = {}; entrevistadosDraft = [];
     render();
   };
+}
+function renderEntrevistadosSection(){
+  const rows = entrevistadosDraft.map((p,idx)=>`
+    <div class="entrev-row">
+      <input class="cad-input" data-entrev-field="${idx}::nome" value="${escapeAttr(p.nome)}" placeholder="Nome">
+      <input class="cad-input" data-entrev-field="${idx}::funcao" value="${escapeAttr(p.funcao)}" placeholder="Função">
+      <button class="icon-btn danger-btn" data-entrev-del="${idx}" title="Remover">✕</button>
+    </div>
+  `).join('');
+  return `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="font-size:15px;margin-bottom:8px;"><span class="bar"></span>Pessoas entrevistadas (amostragem)</div>
+      ${rows || '<div class="empty-cad">Nenhuma pessoa adicionada ainda — opcional, mas ajuda no relatório final.</div>'}
+      <button class="linkbtn" id="entrevAddBtn" style="margin-top:8px;">+ Adicionar pessoa</button>
+    </div>
+  `;
+}
+function attachEntrevistadosSection(){
+  document.querySelectorAll('[data-entrev-field]').forEach(el=>{
+    el.oninput = ()=>{ const [idx, campo] = el.dataset.entrevField.split('::'); entrevistadosDraft[Number(idx)][campo] = el.value; };
+  });
+  document.querySelectorAll('[data-entrev-del]').forEach(el=>{
+    el.onclick = ()=>{ entrevistadosDraft.splice(Number(el.dataset.entrevDel),1); render(); };
+  });
+  const addBtn = document.getElementById('entrevAddBtn');
+  if(addBtn) addBtn.onclick = ()=>{ entrevistadosDraft.push({ nome:'', funcao:'' }); render(); };
 }
 function renderAuditorFormHtml(){
   const itens = sorteio.itens;
@@ -1161,6 +1154,7 @@ function renderAuditorFormHtml(){
         Auditor: <b>${escapeHtml(auditorNome)}</b> &nbsp;·&nbsp;
         <b>${respondidos}</b> de ${itens.length} itens respondidos
       </div>
+      ${renderEntrevistadosSection()}
       ${itemsHtml}
       <div class="card" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
         <button class="tabbtn" id="cancelarSorteioBtn">← Recomeçar</button>
@@ -1171,6 +1165,7 @@ function renderAuditorFormHtml(){
   `;
 }
 function attachAuditorForm(){
+  attachEntrevistadosSection();
   document.querySelectorAll('[data-res]').forEach(btn=>{
     btn.onclick = ()=>{
       const [ordem, resultado] = btn.dataset.res.split('::');
@@ -1190,7 +1185,7 @@ function attachAuditorForm(){
   const cancelBtn = document.getElementById('cancelarSorteioBtn');
   if(cancelBtn) cancelBtn.onclick = ()=>{
     if(!confirm('Cancelar essa auditoria? Você poderá sortear outro checklist depois.')) return;
-    sorteio = null; respostasDraft = {}; render();
+    sorteio = null; respostasDraft = {}; entrevistadosDraft = []; render();
   };
   const enviarBtn = document.getElementById('enviarAuditoriaBtn');
   if(enviarBtn) enviarBtn.onclick = async ()=>{
@@ -1207,20 +1202,14 @@ function attachAuditorForm(){
       resultado: respostasDraft[it.ordem].resultado,
       comentario: (respostasDraft[it.ordem].comentario||'').trim()
     }));
+    const entrevistados = entrevistadosDraft.filter(p=>p.nome.trim()).map(p=>({ nome:p.nome.trim(), funcao:(p.funcao||'').trim() }));
     const payload = {
       type: 'auditoria',
-      auditoria: {
-        checklist_id: sorteio.id, disciplina: sorteio.disciplina, checklist_nome: sorteio.nome,
-        auditor: auditorNome, data: new Date().toISOString(), auditoria_id: auditorCampanhaId
-      },
-      respostas
+      auditoria: { checklist_id: sorteio.id, disciplina: sorteio.disciplina, checklist_nome: sorteio.nome, auditor: auditorNome, data: new Date().toISOString(), auditoria_id: auditorCampanhaId },
+      respostas, entrevistados
     };
     const res = await postJson(payload);
-    if(!res.ok){
-      enviarBtn.disabled = false; enviarBtn.textContent = 'Enviar auditoria';
-      errEl.textContent = res.error || 'Falha ao enviar. Tente de novo.';
-      return;
-    }
+    if(!res.ok){ enviarBtn.disabled = false; enviarBtn.textContent = 'Enviar auditoria'; errEl.textContent = res.error || 'Falha ao enviar. Tente de novo.'; return; }
     auditorSubmitted = {
       conformes: respostas.filter(r=>r.resultado==='CONFORME').length,
       naoConformes: respostas.filter(r=>r.resultado==='NAO_CONFORME').length,
@@ -1233,24 +1222,22 @@ function attachAuditorForm(){
 function renderSuccessHtml(){
   const s = auditorSubmitted;
   return `
-    <div class="section">
-      <div class="card success-box">
-        <div class="ico">✅</div>
-        <h2 style="color:var(--navy-900);">Auditoria enviada!</h2>
-        <div style="color:var(--text-muted);font-size:13.5px;margin-bottom:6px;">${escapeHtml(s.checklistNome)} · ${escapeHtml(s.disciplina)}</div>
-        <div class="result-summary-strip" style="justify-content:center;">
-          <span class="chip ok">${s.conformes} conforme(s)</span>
-          <span class="chip bad">${s.naoConformes} não conforme(s)</span>
-          <span class="chip na">${s.nas} N/A</span>
-        </div>
-        <button class="linkbtn" id="novaAuditoriaBtn" style="background:var(--navy-800);color:#fff;border-color:var(--navy-800);margin-top:22px;">Nova auditoria</button>
+    <div class="section"><div class="card success-box">
+      <div class="ico">✅</div>
+      <h2 style="color:var(--navy-900);">Auditoria enviada!</h2>
+      <div style="color:var(--text-muted);font-size:13.5px;margin-bottom:6px;">${escapeHtml(s.checklistNome)} · ${escapeHtml(s.disciplina)}</div>
+      <div class="result-summary-strip" style="justify-content:center;">
+        <span class="chip ok">${s.conformes} conforme(s)</span>
+        <span class="chip bad">${s.naoConformes} não conforme(s)</span>
+        <span class="chip na">${s.nas} N/A</span>
       </div>
-    </div>
+      <button class="linkbtn" id="novaAuditoriaBtn" style="background:var(--navy-800);color:#fff;border-color:var(--navy-800);margin-top:22px;">Nova auditoria</button>
+    </div></div>
   `;
 }
 function attachSuccess(){
   document.getElementById('novaAuditoriaBtn').onclick = ()=>{
-    auditorSubmitted = null; sorteio = null; respostasDraft = {}; auditorNome=''; auditorCampanhaId=''; auditorDisciplina='';
+    auditorSubmitted = null; sorteio = null; respostasDraft = {}; entrevistadosDraft = []; auditorNome=''; auditorCampanhaId=''; auditorDisciplina='';
     render();
   };
 }
@@ -1264,39 +1251,35 @@ function renderLiderContent(){
 }
 function renderLiderPickerHtml(){
   const sorted = [...CAMPANHAS].sort((a,b)=> new Date(b.data_criacao||0) - new Date(a.data_criacao||0));
-  if(!sorted.length){
-    return `<div class="section"><div class="card"><div class="empty">Nenhuma auditoria foi criada ainda. Peça pro gestor abrir uma na aba "Auditorias".</div></div></div>`;
-  }
+  if(!sorted.length){ return `<div class="section"><div class="card"><div class="empty">Nenhuma auditoria foi criada ainda. Peça pro gestor abrir uma na aba "Auditorias".</div></div></div>`; }
   const cards = sorted.map(c=>{
     const qtd = execucoesDaCampanha(c.id).length;
     return `
       <div class="camp-card" data-camp-pick="${c.id}">
-        <div class="info">
-          <div class="titulo">${escapeHtml(c.titulo)}</div>
-          <div class="meta">${c.local?escapeHtml(c.local)+' · ':''}${formatDateOnly(c.data_criacao)}</div>
-        </div>
+        <div class="info"><div class="titulo">${escapeHtml(c.titulo)}</div><div class="meta">${c.rai_numero?escapeHtml(c.rai_numero)+' · ':''}${c.local?escapeHtml(c.local)+' · ':''}${formatDateOnly(c.data_criacao)}</div></div>
         <div class="cnt">${qtd} checklist(s)</div>
         <span class="status-tag ${c.status==='aberta'?'ativo':'inativo'}">${c.status==='aberta'?'Aberta':'Encerrada'}</span>
       </div>
     `;
   }).join('');
-  return `
-    <div class="section">
-      <div class="section-title"><span class="bar"></span>Escolha a auditoria pra revisar</div>
-      ${cards}
-    </div>
-  `;
+  return `<div class="section"><div class="section-title"><span class="bar"></span>Escolha a auditoria pra revisar</div>${cards}</div>`;
 }
 function attachLiderPicker(){
-  document.querySelectorAll('[data-camp-pick]').forEach(el=>{
-    el.onclick = ()=>{ liderCampanhaId = el.dataset.campPick; liderView = 'revisao'; render(); };
-  });
+  document.querySelectorAll('[data-camp-pick]').forEach(el=>{ el.onclick = ()=>{ liderCampanhaId = el.dataset.campPick; liderView = 'revisao'; render(); }; });
+}
+function catButtonsHtml(execId, ordem, atual){
+  const opts = ['', 'PP','OP','OBS','NC'];
+  return `<select class="cat-select ${atual?'cat-'+atual:''}" data-lider-cat="${execId}::${ordem}">
+    ${opts.map(o=>`<option value="${o}" ${atual===o?'selected':''}>${o===''?'Sem categoria no relatório':CATEGORIA_SIGLA[o]+' — '+CATEGORIA_LABEL[o]}</option>`).join('')}
+  </select>`;
 }
 function renderLiderRevisaoHtml(campId){
   const camp = CAMPANHAS.find(c=>c.id===campId);
   const execs = execucoesDaCampanha(campId).sort((a,b)=> new Date(a.data||0)-new Date(b.data||0));
   const execsHtml = execs.length ? execs.map(e=>{
     const resp = respostasPorExecucao(e.id);
+    const entrevHtml = e.entrevistados && e.entrevistados.length
+      ? `<div class="entrev-list-view">${e.entrevistados.map(p=>`<div class="p"><b>${escapeHtml(p.nome)}</b> — ${escapeHtml(p.funcao||'—')}</div>`).join('')}</div>` : '';
     const itemsHtml = resp.map(r=>{
       const excl = !!r.excluido;
       return `
@@ -1308,22 +1291,18 @@ function renderLiderRevisaoHtml(campId){
             <button class="result-btn na ${r.resultado==='NA'?'on':''}" data-lider-res="${e.id}::${r.ordem}::NA">— N/A</button>
           </div>
           <textarea class="item-comment" data-lider-comment="${e.id}::${r.ordem}" placeholder="Evidência / observações...">${escapeHtml(r.comentario)}</textarea>
-          <label class="excl-toggle">
-            <input type="checkbox" data-lider-excl="${e.id}::${r.ordem}" ${excl?'checked':''}>
-            Excluir este ponto do relatório final
-          </label>
+          ${catButtonsHtml(e.id, r.ordem, r.categoria)}
+          <label class="excl-toggle"><input type="checkbox" data-lider-excl="${e.id}::${r.ordem}" ${excl?'checked':''}> Excluir este ponto do relatório final</label>
         </div>
       `;
     }).join('');
     return `
       <div class="lider-exec-card">
         <div class="lider-exec-head">
-          <div>
-            <div class="titulo">${escapeHtml(e.disciplina)} — ${escapeHtml(e.checklist_nome)}</div>
-            <div class="meta">Auditor: ${escapeHtml(e.auditor)} · ${formatDate(e.data)}</div>
-          </div>
+          <div><div class="titulo">${escapeHtml(e.disciplina)} — ${escapeHtml(e.checklist_nome)}</div><div class="meta">Auditor: ${escapeHtml(e.auditor)} · ${formatDate(e.data)}</div></div>
           <button class="icon-btn danger-btn" title="Excluir este checklist inteiro" data-lider-del-exec="${e.id}">🗑 Excluir checklist</button>
         </div>
+        ${entrevHtml}
         ${itemsHtml || '<div class="empty-cad">Sem itens.</div>'}
       </div>
     `;
@@ -1331,14 +1310,20 @@ function renderLiderRevisaoHtml(campId){
 
   return `
     <div class="section">
-      <div class="section-title"><span class="bar"></span>${escapeHtml(camp.titulo)}</div>
-      <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
-        <div class="auditor-progress" style="margin:0;">${camp.local?escapeHtml(camp.local)+' · ':''}${formatDateOnly(camp.data_criacao)} · <span class="status-tag ${camp.status==='aberta'?'ativo':'inativo'}">${camp.status==='aberta'?'Aberta':'Encerrada'}</span></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="tabbtn" id="liderVoltarBtn">← Trocar de auditoria</button>
-          <button class="tabbtn" id="liderEncerrarBtn">${camp.status==='aberta'?'Encerrar auditoria':'Reabrir auditoria'}</button>
-          <button class="icon-btn danger-btn" title="Excluir auditoria inteira" id="liderExcluirCampBtn">🗑</button>
-          <button class="linkbtn" id="liderRelatorioBtn" style="background:var(--navy-800);color:#fff;border-color:var(--navy-800);">📄 Gerar relatório</button>
+      <div class="section-title"><span class="bar"></span>${escapeHtml(camp.titulo)} ${camp.rai_numero?'<span style="font-size:14px;color:var(--text-muted);font-weight:400;">— '+escapeHtml(camp.rai_numero)+'</span>':''}</div>
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <div class="auditor-progress" style="margin:0;">${camp.sede_obra?escapeHtml(camp.sede_obra)+' · ':''}${formatDateOnly(camp.data_criacao)} · <span class="status-tag ${camp.status==='aberta'?'ativo':'inativo'}">${camp.status==='aberta'?'Aberta':'Encerrada'}</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="tabbtn" id="liderVoltarBtn">← Trocar de auditoria</button>
+            <button class="tabbtn" id="liderEncerrarBtn">${camp.status==='aberta'?'Encerrar auditoria':'Reabrir auditoria'}</button>
+            <button class="icon-btn danger-btn" title="Excluir auditoria inteira" id="liderExcluirCampBtn">🗑</button>
+            <button class="linkbtn" id="liderRelatorioBtn" style="background:var(--navy-800);color:#fff;border-color:var(--navy-800);">📄 Gerar relatório</button>
+          </div>
+        </div>
+        <div class="field" style="margin-top:14px;">
+          <label>Considerações gerais (texto livre pro relatório)</label>
+          <textarea id="liderConsidGerais" style="width:100%;min-height:80px;font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;" placeholder="Parágrafo geral sobre a auditoria...">${escapeHtml(camp.consideracoes_gerais)}</textarea>
         </div>
       </div>
       ${execsHtml}
@@ -1350,10 +1335,12 @@ function attachLiderRevisao(){
   document.getElementById('liderRelatorioBtn').onclick = ()=>{ liderView = 'relatorio'; render(); };
   document.getElementById('liderEncerrarBtn').onclick = ()=>{ toggleCampanhaStatus(liderCampanhaId); };
   document.getElementById('liderExcluirCampBtn').onclick = ()=> excluirCampanha(liderCampanhaId);
-
-  document.querySelectorAll('[data-lider-del-exec]').forEach(el=>{
-    el.onclick = ()=> excluirExecucaoAction(el.dataset.liderDelExec);
-  });
+  let cgTimer = null;
+  document.getElementById('liderConsidGerais').oninput = (ev)=>{
+    clearTimeout(cgTimer);
+    cgTimer = setTimeout(()=>{ editarCampanhaCampo(liderCampanhaId, 'consideracoes_gerais', ev.target.value); }, 500);
+  };
+  document.querySelectorAll('[data-lider-del-exec]').forEach(el=>{ el.onclick = ()=> excluirExecucaoAction(el.dataset.liderDelExec); });
   document.querySelectorAll('[data-lider-res]').forEach(btn=>{
     btn.onclick = ()=>{
       const [execId, ordem, resultado] = btn.dataset.liderRes.split('::');
@@ -1361,7 +1348,9 @@ function attachLiderRevisao(){
       const r = RESPOSTAS.find(r=>r.execucao_id===execId && r.ordem===o);
       const comentario = r ? r.comentario : '';
       const excluido = r ? r.excluido : false;
-      atualizarRespostaAction(execId, o, resultado, comentario, excluido);
+      let categoria = r ? r.categoria : '';
+      if(resultado==='NAO_CONFORME' && !categoria) categoria = 'NC';
+      atualizarRespostaAction(execId, o, resultado, comentario, excluido, categoria);
       render();
     };
   });
@@ -1373,9 +1362,7 @@ function attachLiderRevisao(){
         const [execId, ordem] = ta.dataset.liderComment.split('::');
         const o = Number(ordem);
         const r = RESPOSTAS.find(r=>r.execucao_id===execId && r.ordem===o);
-        const resultado = r ? r.resultado : null;
-        const excluido = r ? r.excluido : false;
-        atualizarRespostaAction(execId, o, resultado, ta.value, excluido);
+        atualizarRespostaAction(execId, o, r?r.resultado:null, ta.value, r?r.excluido:false, r?r.categoria:'');
       }, 600);
     };
   });
@@ -1384,64 +1371,106 @@ function attachLiderRevisao(){
       const [execId, ordem] = chk.dataset.liderExcl.split('::');
       const o = Number(ordem);
       const r = RESPOSTAS.find(r=>r.execucao_id===execId && r.ordem===o);
-      const resultado = r ? r.resultado : null;
-      const comentario = r ? r.comentario : '';
-      atualizarRespostaAction(execId, o, resultado, comentario, chk.checked);
+      atualizarRespostaAction(execId, o, r?r.resultado:null, r?r.comentario:'', chk.checked, r?r.categoria:'');
+      render();
+    };
+  });
+  document.querySelectorAll('[data-lider-cat]').forEach(sel=>{
+    sel.onchange = ()=>{
+      const [execId, ordem] = sel.dataset.liderCat.split('::');
+      const o = Number(ordem);
+      const r = RESPOSTAS.find(r=>r.execucao_id===execId && r.ordem===o);
+      atualizarRespostaAction(execId, o, r?r.resultado:null, r?r.comentario:'', r?r.excluido:false, sel.value);
       render();
     };
   });
 }
 
-// ---------- relatório em texto ----------
+// ---------- relatório em texto (modelo RAI Milplan) ----------
 function buildRelatorioTexto(campId){
   const camp = CAMPANHAS.find(c=>c.id===campId);
   const execs = execucoesDaCampanha(campId).sort((a,b)=> new Date(a.data||0)-new Date(b.data||0));
-  let linhas = [];
-  linhas.push('RELATÓRIO DE AUDITORIA');
-  linhas.push(camp.titulo || '');
-  if(camp.local) linhas.push('Local: '+camp.local);
-  linhas.push('Data: '+formatDateOnly(camp.data_criacao));
-  linhas.push('');
+  let L = [];
 
-  let totalItens=0, conf=0, nc=0, na=0;
-  execs.forEach(e=>{
-    respostasPorExecucao(e.id).filter(r=>!r.excluido).forEach(r=>{
-      totalItens++;
-      if(r.resultado==='CONFORME') conf++;
-      else if(r.resultado==='NAO_CONFORME') nc++;
-      else if(r.resultado==='NA') na++;
-    });
-  });
-  const base = conf+nc;
-  const pct = base ? Math.round((conf/base)*1000)/10 : null;
-  linhas.push('RESUMO');
-  linhas.push('Itens verificados: '+totalItens+' | Conformes: '+conf+' | Não conformes: '+nc+' | N/A: '+na);
-  linhas.push('Conformidade geral: '+(pct===null?'—':pct+'%'));
-  linhas.push('');
+  L.push('RELATÓRIO DE AUDITORIA INTERNA DO SIG');
+  L.push(camp.rai_numero ? 'RAI n°: '+camp.rai_numero : '');
+  L.push(camp.titulo || '');
+  if(camp.sede_obra) L.push('Sede/Obra: '+camp.sede_obra);
+  if(camp.periodo_inicio || camp.periodo_fim) L.push('Período da Auditoria: '+formatDateOnly(camp.periodo_inicio)+' e '+formatDateOnly(camp.periodo_fim));
+  if(camp.objetivo) L.push('Objetivo da Auditoria: '+camp.objetivo);
+  if(camp.lider) L.push('Auditor Líder: '+camp.lider);
+  if(camp.equipe) L.push('Membros da Equipe Auditora: '+camp.equipe);
+  if(camp.criterio) L.push('Critério da Auditoria: '+camp.criterio);
+  if(camp.metodo) L.push('Método da Auditoria: '+camp.metodo);
+  L = L.filter(l=>l!=='');
+  L.push('');
 
-  execs.forEach(e=>{
-    const resp = respostasPorExecucao(e.id).filter(r=>!r.excluido);
-    if(!resp.length) return;
-    linhas.push('— '+e.disciplina+' — '+e.checklist_nome+' (Auditor: '+e.auditor+', '+formatDate(e.data)+') —');
-    resp.forEach(r=>{
-      linhas.push(r.ordem+'. '+r.item+' — '+labelResultado(r.resultado));
-      if(r.comentario) linhas.push('   Evidência: '+r.comentario);
-    });
-    linhas.push('');
-  });
-
-  const naoConf = [];
-  execs.forEach(e=>{
-    respostasPorExecucao(e.id).filter(r=>r.resultado==='NAO_CONFORME' && !r.excluido).forEach(r=>{
-      naoConf.push({ disciplina: e.disciplina, item: r.item, comentario: r.comentario });
-    });
-  });
-  if(naoConf.length){
-    linhas.push('NÃO CONFORMIDADES IDENTIFICADAS');
-    naoConf.forEach((n,i)=>{ linhas.push((i+1)+'. ['+n.disciplina+'] '+n.item+(n.comentario?' — '+n.comentario:'')); });
+  if(camp.consideracoes_gerais){
+    L.push('CONSIDERAÇÕES GERAIS');
+    L.push(camp.consideracoes_gerais);
+    L.push('');
   }
 
-  return linhas.join('\n');
+  L.push('CONSIDERAÇÕES ESPECÍFICAS');
+  L.push('');
+  const porDisc = {};
+  execs.forEach(e=>{ (porDisc[e.disciplina] = porDisc[e.disciplina]||[]).push(e); });
+  Object.keys(porDisc).forEach(disc=>{
+    L.push('PROCESSO AUDITADO: '+disc.toUpperCase());
+    const execsDisc = porDisc[disc];
+    const entrevistados = [];
+    execsDisc.forEach(e=>{ (e.entrevistados||[]).forEach(p=>entrevistados.push(p)); });
+    if(entrevistados.length){
+      L.push('Pessoas entrevistadas:');
+      entrevistados.forEach(p=>{ L.push('- '+p.nome+(p.funcao?' ('+p.funcao+')':'')); });
+    }
+    L.push('Constatações:');
+    execsDisc.forEach(e=>{
+      respostasPorExecucao(e.id).filter(r=>!r.excluido).forEach(r=>{
+        if(r.comentario){
+          L.push('- '+r.comentario+' ['+labelResultado(r.resultado)+(r.categoria?' · '+CATEGORIA_SIGLA[r.categoria]:'')+']');
+        }
+      });
+    });
+    L.push('');
+  });
+
+  const achados = { PP:[], OP:[], OBS:[], NC:[] };
+  execs.forEach(e=>{
+    respostasPorExecucao(e.id).filter(r=>!r.excluido && r.categoria && achados[r.categoria]).forEach(r=>{
+      achados[r.categoria].push({ disciplina: e.disciplina, item: r.item, comentario: r.comentario });
+    });
+  });
+
+  L.push('CONSIDERAÇÕES FINAIS');
+  L.push('');
+  if(achados.PP.length){
+    L.push('Pontos Positivos:');
+    achados.PP.forEach(a=>{ L.push('• '+(a.comentario||a.item)+' ['+a.disciplina+']'); });
+    L.push('');
+  }
+  if(achados.OP.length){
+    L.push('Oportunidades de Melhoria:');
+    achados.OP.forEach((a,i)=>{ L.push('OP-'+String(i+1).padStart(2,'0')+': '+(a.comentario||a.item)+' ['+a.disciplina+']'); });
+    L.push('');
+  }
+  if(achados.OBS.length){
+    L.push('Observações:');
+    achados.OBS.forEach((a,i)=>{ L.push('OBS-'+String(i+1).padStart(2,'0')+': '+(a.comentario||a.item)+' ['+a.disciplina+']'); });
+    L.push('');
+  }
+  if(achados.NC.length){
+    L.push('Não conformidades:');
+    achados.NC.forEach((a,i)=>{ L.push('NC-'+String(i+1).padStart(2,'0')+': '+(a.comentario||a.item)+' ['+a.disciplina+']'); });
+    L.push('');
+  }
+
+  L.push('APROVAÇÃO');
+  if(camp.lider) L.push('Auditor Líder: '+camp.lider+' — Aprovação Eletrônica');
+  if(camp.equipe) L.push('Membros: '+camp.equipe+' — Aprovação Eletrônica');
+  L.push('Data da Emissão: '+formatDateOnly(new Date().toISOString()));
+
+  return L.join('\n');
 }
 function renderRelatorioHtml(campId){
   const texto = buildRelatorioTexto(campId);
@@ -1468,7 +1497,11 @@ function attachRelatorio(){
   };
   document.getElementById('relatorioWordBtn').onclick = ()=>{
     const texto = buildRelatorioTexto(liderCampanhaId);
-    const htmlBody = texto.split('\n').map(l=> l.trim()==='' ? '<p>&nbsp;</p>' : `<p style="margin:0 0 6px;">${escapeHtml(l)}</p>`).join('');
+    const htmlBody = texto.split('\n').map(l=>{
+      if(l==='') return '<p>&nbsp;</p>';
+      const isHeading = l===l.toUpperCase() && l.replace(/[^A-ZÀ-Ú]/g,'').length>3 && !l.includes(':');
+      return isHeading ? `<p style="margin:14px 0 6px;font-weight:bold;">${escapeHtml(l)}</p>` : `<p style="margin:0 0 4px;">${escapeHtml(l)}</p>`;
+    }).join('');
     const htmlDoc = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
       <head><meta charset='utf-8'><title>Relatório de Auditoria</title></head>
       <body style="font-family:Calibri, Arial, sans-serif;font-size:11pt;">${htmlBody}</body></html>`;
@@ -1531,8 +1564,8 @@ function showAuthGate(targetRole, errorMsg){
 (async function init(){
   document.getElementById('backToLandingBtn').onclick = (e)=>{
     e.preventDefault();
-    role = null; sorteio = null; auditorSubmitted = null; respostasDraft = {};
-    currentTab = 'painel'; liderCampanhaId = null; liderView = 'revisao';
+    role = null; sorteio = null; auditorSubmitted = null; respostasDraft = {}; entrevistadosDraft = [];
+    currentTab = 'painel'; liderCampanhaId = null; liderView = 'revisao'; editingCampId = null;
     try{ sessionStorage.removeItem('audc_role'); }catch(err){}
     render();
     showLanding();
